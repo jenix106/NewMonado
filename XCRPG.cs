@@ -1,4 +1,5 @@
-﻿using UnityEngine;
+﻿using System.Collections.Generic;
+using UnityEngine;
 using ThunderRoad;
 using XenobladeRPG;
 
@@ -59,7 +60,7 @@ namespace NewMonado
         }
         public void FixedUpdate()
         {
-            if (item.IsHanded() && monado.triggerPressed && (item.rb.velocity - item.mainHandler.creature.currentLocomotion.rb.velocity).sqrMagnitude >= 225f)
+            if (item.IsHanded() && monado.triggerPressed && (item.physicBody.velocity - item.mainHandler.creature.currentLocomotion.rb.velocity).sqrMagnitude >= 225f)
             {
                 switch (monado.component)
                 {
@@ -105,7 +106,7 @@ namespace NewMonado
                                     sourceColliderGroup = item.colliderGroups[0]
                                 };
                                 wave.damageStruct.hitRagdollPart = creature.ragdoll.rootPart;
-                                creature.Damage(wave);
+                                XenobladeManager.Damage(item.mainHandler.creature, creature, wave, XenobladeDamageType.Ether, 3);
                             }
                         }
                         monado.ActivateAura("MonadoCyclone");
@@ -127,7 +128,7 @@ namespace NewMonado
                         break;
                 }
             }
-            if (item.IsHanded() && monado.triggerPressed && item.rb.GetPointVelocity(item.flyDirRef.position).magnitude - item.rb.GetPointVelocity(item.holderPoint.position).magnitude >= 10)
+            if (item.IsHanded() && monado.triggerPressed && item.physicBody.GetPointVelocity(item.flyDirRef.position).magnitude - item.physicBody.GetPointVelocity(item.holderPoint.position).magnitude >= 10)
             {
                 if (monado.component == "Purge" || monado.component == "Eater")
                 {
@@ -143,14 +144,14 @@ namespace NewMonado
                                 sourceColliderGroup = item.colliderGroups[0]
                             };
                             wave.damageStruct.hitRagdollPart = creature.ragdoll.rootPart;
-                            creature.Damage(wave);
+                            XenobladeManager.Damage(item.mainHandler.creature, creature, wave, XenobladeDamageType.Ether, monado.component == "Purge" ? 2 : 1.5f);
                         }
                     }
                     if (monado.component == "Purge")
                         monado.ActivateAura("MonadoPurge");
                     else if (monado.component == "Eater")
                         monado.ActivateAura("MonadoEater");
-                    EffectInstance effectInstance = Catalog.GetData<EffectData>("MonadoWave").Spawn(monado.slash.transform.position, item.mainHandler.creature.centerEyes.rotation);
+                    EffectInstance effectInstance = Catalog.GetData<EffectData>("MonadoWave").Spawn(monado.slash.transform.position, item.mainHandler.creature.centerEyes.rotation, null, null, false);
                     effectInstance.SetIntensity(1.0f);
                     effectInstance.Play();
                     monado.SwapAbility("Default");
@@ -176,11 +177,11 @@ namespace NewMonado
             creature = GetComponent<Creature>();
             imbueSpell = Catalog.GetData<SpellCastCharge>("Fire");
             timer = Time.time;
-            instance = Catalog.GetData<EffectData>("MonadoEnchantAura").Spawn(creature.transform);
+            instance = Catalog.GetData<EffectData>("MonadoEnchantAura").Spawn(creature.transform, null, false);
             instance.SetRenderer(creature.GetRendererForVFX(), false);
             instance.SetIntensity(1f);
             instance.Play();
-            XenobladeEvents.InvokeOnBuffAdded(ref creature, this);
+            XenobladeEvents.InvokeOnBuffAdded(this, creature, this);
         }
         public void FixedUpdate()
         {
@@ -227,7 +228,7 @@ namespace NewMonado
         }
         public void OnDestroy()
         {
-            XenobladeEvents.InvokeOnBuffRemoved(ref creature, this);
+            XenobladeEvents.InvokeOnBuffRemoved(this, creature, this);
         }
     }
     public class XCRPGShieldAura : MonoBehaviour
@@ -245,13 +246,24 @@ namespace NewMonado
         public void Start()
         {
             creature = GetComponent<Creature>();
+            creature.OnDamageEvent += Creature_OnDamageEvent;
             timer = Time.time;
-            instance = Catalog.GetData<EffectData>("MonadoShieldAura").Spawn(creature.transform);
+            instance = Catalog.GetData<EffectData>("MonadoShieldAura").Spawn(creature.transform, null, false);
             instance.SetRenderer(creature.GetRendererForVFX(), false);
             instance.SetIntensity(1f);
             instance.Play();
-            XenobladeEvents.InvokeOnBuffAdded(ref creature, this);
+            XenobladeEvents.InvokeOnBuffAdded(this, creature, this);
         }
+
+        private void Creature_OnDamageEvent(CollisionInstance collisionInstance, EventTime eventTime)
+        {
+            if (collisionInstance?.damageStruct != null && eventTime == EventTime.OnStart && !collisionInstance.ignoreDamage)
+            {
+                absorb -= collisionInstance.damageStruct.damage;
+                collisionInstance.damageStruct.damage = 0;
+            }
+        }
+
         public void FixedUpdate()
         {
             if (Time.time - timer >= auraTime || creature.isKilled || absorb <= 0)
@@ -262,7 +274,8 @@ namespace NewMonado
         public void OnDestroy()
         {
             instance.Stop();
-            XenobladeEvents.InvokeOnBuffRemoved(ref creature, this);
+            creature.OnDamageEvent -= Creature_OnDamageEvent;
+            XenobladeEvents.InvokeOnBuffRemoved(this, creature, this);
         }
     }
     public class XCRPGSpeedAura : MonoBehaviour
@@ -285,14 +298,14 @@ namespace NewMonado
             timer = Time.time;
             creature.currentLocomotion.SetSpeedModifier(this, mult, mult, mult, mult, mult);
             if (creature.isPlayer)
-                XenobladeManager.SetStatModifier(this, 1, 1, 1, 1, 1, 0, 0, 0, 0, 50, 0, 0);
+                XenobladeManager.SetAgilityModifier(this, 1, 50);
             else
-                stats.SetStatModifier(this, 1, 1, 1, 1, 0, 0, 50, 0);
-            instance = Catalog.GetData<EffectData>("MonadoSpeedAura").Spawn(creature.transform);
+                stats.SetAgilityModifier(this, 1, 50);
+            instance = Catalog.GetData<EffectData>("MonadoSpeedAura").Spawn(creature.transform, null, false);
             instance.SetRenderer(creature.GetRendererForVFX(), false);
             instance.SetIntensity(1f);
             instance.Play();
-            XenobladeEvents.InvokeOnBuffAdded(ref creature, this, XenobladeManager.statModifiers.Find(match => match.handler == this), stats.statModifiers.Find(match => match.handler == this));
+            XenobladeEvents.InvokeOnBuffAdded(this, creature, this);
         }
         public void FixedUpdate()
         {
@@ -304,12 +317,12 @@ namespace NewMonado
         public void OnDestroy()
         {
             if (creature.isPlayer)
-                XenobladeManager.RemoveStatModifier(this);
+                XenobladeManager.RemoveAgilityModifier(this);
             else
-                creature.GetComponent<XenobladeStats>().RemoveStatModifier(this);
+                creature.GetComponent<XenobladeStats>().RemoveAgilityModifier(this);
             creature.currentLocomotion.RemoveSpeedModifier(this);
             instance?.Stop();
-            XenobladeEvents.InvokeOnBuffRemoved(ref creature, this);
+            XenobladeEvents.InvokeOnBuffRemoved(this, creature, this);
         }
     }
     public class XCRPGPurgeAura : MonoBehaviour
@@ -327,7 +340,7 @@ namespace NewMonado
             creature = GetComponent<Creature>();
             timer = Time.time;
             stats = creature.GetComponent<XenobladeStats>();
-            XenobladeEvents.InvokeOnDebuffAdded(ref creature, this);
+            XenobladeEvents.InvokeOnDebuffAdded(this, creature, this);
             creature.TryElectrocute(1, 3, true, false, Catalog.GetData<EffectData>("ImbueLightningRagdoll", true));
             creature.ragdoll.AddPhysicToggleModifier(this);
             if (stats != null) stats.isAuraSealed = true;
@@ -357,7 +370,7 @@ namespace NewMonado
             if (stats != null) stats.isAuraSealed = false;
             else XenobladeManager.isAuraSealed = false;
             creature.mana.currentMana = creature.mana.maxMana;
-            XenobladeEvents.InvokeOnDebuffRemoved(ref creature, this);
+            XenobladeEvents.InvokeOnDebuffRemoved(this, creature, this);
         }
     }
     public class XCRPGCycloneAura : MonoBehaviour
@@ -391,7 +404,7 @@ namespace NewMonado
         public void Start()
         {
             creature = GetComponent<Creature>();
-            XenobladeEvents.InvokeOnDebuffAdded(ref creature, this);
+            XenobladeEvents.InvokeOnDebuffAdded(this, creature, this);
             creature.TryPush(Creature.PushType.Hit, (creature.transform.position - collisionInstance.sourceColliderGroup.collisionHandler.item.lastHandler.creature.transform.position).normalized, 1, collisionInstance.damageStruct.hitRagdollPart.type);
             Destroy(creature.gameObject.GetComponent<EnchantAura>());
             Destroy(creature.gameObject.GetComponent<ShieldAura>());
@@ -399,12 +412,53 @@ namespace NewMonado
             Destroy(creature.gameObject.GetComponent<ArmorAura>());
             XenobladeStats stats = creature.GetComponent<XenobladeStats>();
             if (stats != null)
-                for (int index = 0; index < stats.statModifiers.Count; ++index)
+            {
+                List<XenobladeStats.StrengthModifier> strengthModifiers = new List<XenobladeStats.StrengthModifier>();
+                foreach(XenobladeStats.StrengthModifier modifier in stats.strengthModifiers)
                 {
-                    if (stats.statModifiers[index] != null && (stats.statModifiers[index].strengthMultiplier > 1 || stats.statModifiers[index].etherMultiplier > 1 || stats.statModifiers[index].physicalDefenseModifier > 0
-                        || stats.statModifiers[index].etherDefenseModifier > 0 || stats.statModifiers[index].agilityMultiplier > 1))
-                        stats.RemoveStatModifier(stats.statModifiers[index].handler);
+                    if (modifier.multiplier > 1) strengthModifiers.Add(modifier);
                 }
+                foreach(XenobladeStats.StrengthModifier modifier in strengthModifiers)
+                {
+                    stats.RemoveStrengthModifier(modifier.handler);
+                }
+                List<XenobladeStats.EtherModifier> etherModifiers = new List<XenobladeStats.EtherModifier>();
+                foreach (XenobladeStats.EtherModifier modifier in stats.etherModifiers)
+                {
+                    if (modifier.multiplier > 1) etherModifiers.Add(modifier);
+                }
+                foreach (XenobladeStats.EtherModifier modifier in etherModifiers)
+                {
+                    stats.RemoveEtherModifier(modifier.handler);
+                }
+                List<XenobladeStats.PhysicalDefenseModifier> physicalDefenseModifiers = new List<XenobladeStats.PhysicalDefenseModifier>();
+                foreach (XenobladeStats.PhysicalDefenseModifier modifier in stats.physicalDefenseModifiers)
+                {
+                    if (modifier.modifier > 0) physicalDefenseModifiers.Add(modifier);
+                }
+                foreach (XenobladeStats.PhysicalDefenseModifier modifier in physicalDefenseModifiers)
+                {
+                    stats.RemovePhysicalDefenseModifier(modifier.handler);
+                }
+                List<XenobladeStats.EtherDefenseModifier> etherDefenseModifiers = new List<XenobladeStats.EtherDefenseModifier>();
+                foreach (XenobladeStats.EtherDefenseModifier modifier in stats.etherDefenseModifiers)
+                {
+                    if (modifier.modifier > 0) etherDefenseModifiers.Add(modifier);
+                }
+                foreach (XenobladeStats.EtherDefenseModifier modifier in etherDefenseModifiers)
+                {
+                    stats.RemoveEtherDefenseModifier(modifier.handler);
+                }
+                List<XenobladeStats.AgilityModifier> agilityModifiers = new List<XenobladeStats.AgilityModifier>();
+                foreach (XenobladeStats.AgilityModifier modifier in stats.agilityModifiers)
+                {
+                    if (modifier.multiplier > 1 || modifier.modifier > 0) agilityModifiers.Add(modifier);
+                }
+                foreach (XenobladeStats.AgilityModifier modifier in agilityModifiers)
+                {
+                    stats.RemoveAgilityModifier(modifier.handler);
+                }
+            }
             if (creature.GetComponent<Bleed>() is Bleed bleed)
             {
                 if (bleed.initialDamage.damageStruct.damage > collisionInstance.damageStruct.damage)
@@ -423,7 +477,7 @@ namespace NewMonado
         }
         public void OnDestroy()
         {
-            XenobladeEvents.InvokeOnDebuffRemoved(ref creature, this);
+            XenobladeEvents.InvokeOnDebuffRemoved(this, creature, this);
         }
     }
     public class XCRPGArmorAura : MonoBehaviour
@@ -443,13 +497,23 @@ namespace NewMonado
         public void Start()
         {
             creature = GetComponent<Creature>();
+            creature.OnDamageEvent += Creature_OnDamageEvent;
             timer = Time.time;
-            instance = Catalog.GetData<EffectData>("MonadoArmorAura").Spawn(creature.transform);
+            instance = Catalog.GetData<EffectData>("MonadoArmorAura").Spawn(creature.transform, null, false);
             instance.SetRenderer(creature.GetRendererForVFX(), false);
             instance.SetIntensity(1f);
             instance.Play();
-            XenobladeEvents.InvokeOnBuffAdded(ref creature, this);
+            XenobladeEvents.InvokeOnBuffAdded(this, creature, this);
         }
+
+        private void Creature_OnDamageEvent(CollisionInstance collisionInstance, EventTime eventTime)
+        {
+            if (collisionInstance?.damageStruct != null && eventTime == EventTime.OnStart && !collisionInstance.ignoreDamage)
+            {
+                collisionInstance.damageStruct.damage *= 1 - mult;
+            }
+        }
+
         public void FixedUpdate()
         {
             if (Time.time - timer >= auraTime || creature.isKilled)
@@ -460,7 +524,8 @@ namespace NewMonado
         public void OnDestroy()
         {
             instance.Stop();
-            XenobladeEvents.InvokeOnBuffRemoved(ref creature, this);
+            creature.OnDamageEvent -= Creature_OnDamageEvent;
+            XenobladeEvents.InvokeOnBuffRemoved(this, creature, this);
         }
     }
 }

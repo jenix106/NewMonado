@@ -4,44 +4,9 @@ using System.Collections.Generic;
 using ThunderRoad;
 using UnityEngine;
 using UnityEngine.VFX;
-using HarmonyLib;
 
 namespace NewMonado
 {
-    public class MonadoPatcher
-    {
-        public static void DoPatching()
-        {
-            Harmony harmony = new Harmony("Monado Redux");
-            harmony.PatchAll();
-        }
-    }
-    [HarmonyPatch(typeof(Creature), nameof(Creature.Damage))]
-    public class MonadoDamagePatch
-    {
-        [HarmonyAfter(new string[] { "XenobladeRPG" })]
-        static void Prefix(Creature __instance, ref CollisionInstance collisionInstance)
-        {
-            if (__instance.GetComponent<ArmorAura>() is ArmorAura armor && collisionInstance?.damageStruct != null)
-            {
-                if (!collisionInstance.ignoreDamage)
-                    collisionInstance.damageStruct.damage *= 1 - armor.mult;
-            }
-            if (__instance.GetComponent<ShieldAura>() is ShieldAura shield && collisionInstance?.damageStruct != null)
-            {
-                shield.absorb -= collisionInstance.damageStruct.damage;
-                collisionInstance.damageStruct.damage = 0;
-            }
-        }
-    }
-    public class MonadoLevel : LevelModule
-    {
-        public override IEnumerator OnLoadCoroutine()
-        {
-            MonadoPatcher.DoPatching();
-            return base.OnLoadCoroutine();
-        }
-    }
     public class MonadoSpell : SpellCastData
     {
         SpellCaster spellCaster;
@@ -171,7 +136,7 @@ namespace NewMonado
             original = beam.transform.localPosition;
             item.mainCollisionHandler.OnCollisionStartEvent += MainCollisionHandler_OnCollisionStartEvent;
             animator.Play("Deactivate");
-            foreach (MaterialData data in Catalog.GetDataList(Catalog.Category.Material))
+            foreach (MaterialData data in Catalog.GetDataList(Category.Material))
             {
                 if (!slash.data.damageModifierData.collisions[0].targetMaterials.Contains(data)) slash.data.damageModifierData.collisions[0].targetMaterials.Add(data);
                 if (!pierce.data.damageModifierData.collisions[0].targetMaterials.Contains(data)) pierce.data.damageModifierData.collisions[0].targetMaterials.Add(data);
@@ -273,13 +238,13 @@ namespace NewMonado
         }
         private IEnumerator Buster(Vector3 contactPoint, Vector3 contactNormal, Vector3 contactNormalUpward)
         {
-            EffectInstance effectInstance = Catalog.GetData<EffectData>("SpellGravityShockwave").Spawn(contactPoint, Quaternion.LookRotation(-contactNormal, contactNormalUpward));
+            EffectInstance effectInstance = Catalog.GetData<EffectData>("SpellGravityShockwave").Spawn(contactPoint, Quaternion.LookRotation(-contactNormal, contactNormalUpward), null, null, false);
             effectInstance.SetIntensity(15);
             effectInstance.Play();
             Collider[] sphereContacts = Physics.OverlapSphere(contactPoint, 15, 218119169);
             List<Creature> creaturesPushed = new List<Creature>();
             List<Rigidbody> rigidbodiesPushed = new List<Rigidbody>();
-            rigidbodiesPushed.Add(item.rb);
+            rigidbodiesPushed.Add(item.physicBody.rigidBody);
             if (item.lastHandler?.creature)
                 creaturesPushed.Add(item.lastHandler.creature);
             float waveDistance = 0.0f;
@@ -305,6 +270,30 @@ namespace NewMonado
                 }
                 foreach (Collider collider in sphereContacts)
                 {
+                    Breakable breakable = collider.attachedRigidbody?.GetComponentInParent<Breakable>();
+                    if (breakable != null)
+                    {
+                        if (20 * 20 > breakable.instantaneousBreakVelocityThreshold)
+                            breakable.Break();
+                        for (int index = 0; index < breakable.subBrokenItems.Count; ++index)
+                        {
+                            Rigidbody rigidBody = breakable.subBrokenItems[index].physicBody.rigidBody;
+                            if (rigidBody && !rigidbodiesPushed.Contains(rigidBody))
+                            {
+                                rigidBody.AddExplosionForce(20, contactPoint, 15, 0.5f, ForceMode.VelocityChange);
+                                rigidbodiesPushed.Add(rigidBody);
+                            }
+                        }
+                        for (int index = 0; index < breakable.subBrokenBodies.Count; ++index)
+                        {
+                            PhysicBody subBrokenBody = breakable.subBrokenBodies[index];
+                            if (subBrokenBody && !rigidbodiesPushed.Contains(subBrokenBody.rigidBody))
+                            {
+                                subBrokenBody.rigidBody.AddExplosionForce(20, contactPoint, 15, 0.5f, ForceMode.VelocityChange);
+                                rigidbodiesPushed.Add(subBrokenBody.rigidBody);
+                            }
+                        }
+                    }
                     if (collider.attachedRigidbody != null && !collider.attachedRigidbody.isKinematic && Vector3.Distance(contactPoint, collider.transform.position) < waveDistance)
                     {
                         if (collider.attachedRigidbody.gameObject.layer != GameManager.GetLayer(LayerName.NPC) && !rigidbodiesPushed.Contains(collider.attachedRigidbody))
@@ -417,14 +406,14 @@ namespace NewMonado
             EffectInstance instance;
             public void Start()
             {
-                instance = Catalog.GetData<EffectData>("MonadoElectricity").Spawn(gameObject.transform);
+                instance = Catalog.GetData<EffectData>("MonadoElectricity").Spawn(gameObject.transform, null, false);
                 instance.SetRenderer(gameObject.GetComponent<Renderer>(), false);
                 instance.SetIntensity(0.1f);
                 instance.Play();
             }
             public void OnDestroy()
             {
-                instance.Stop();
+                instance?.Stop();
             }
         }
         public void SetDefault()
@@ -566,7 +555,7 @@ namespace NewMonado
                 wasGrabbed = true;
                 AddMonadoSpells(Player.local.creature.container);
             }
-            if (item.IsHanded() && triggerPressed && (item.rb.velocity - item.lastHandler.creature.currentLocomotion.rb.velocity).sqrMagnitude >= 225f && xenobladeRPG == null)
+            if (item.IsHanded() && triggerPressed && (item.physicBody.velocity - item.lastHandler.creature.currentLocomotion.rb.velocity).sqrMagnitude >= 225f && xenobladeRPG == null)
             {
                 switch (component)
                 {
@@ -629,7 +618,7 @@ namespace NewMonado
                         break;
                 }
             }
-            if (item.IsHanded() && triggerPressed && item.rb.GetPointVelocity(item.flyDirRef.position).magnitude - item.rb.GetPointVelocity(item.holderPoint.position).magnitude >= 10 && xenobladeRPG == null)
+            if (item.IsHanded() && triggerPressed && item.physicBody.GetPointVelocity(item.flyDirRef.position).magnitude - item.physicBody.GetPointVelocity(item.holderPoint.position).magnitude >= 10 && xenobladeRPG == null)
             {
                 if (component == "Purge" || component == "Eater")
                 {
@@ -645,9 +634,9 @@ namespace NewMonado
                                 targetColliderGroup = creature.ragdoll.rootPart.colliderGroup,
                                 sourceColliderGroup = item.colliderGroups[0],
                                 sourceCollider = item.colliderGroups[0].colliders[0],
-                                impactVelocity = item.rb.velocity,
+                                impactVelocity = item.physicBody.velocity,
                                 contactPoint = creature.ragdoll.rootPart.transform.position,
-                                contactNormal = -item.rb.velocity
+                                contactNormal = -item.physicBody.velocity
                             };
                             instance.damageStruct.penetration = DamageStruct.Penetration.None;
                             instance.damageStruct.hitRagdollPart = creature.ragdoll.rootPart;
@@ -699,13 +688,13 @@ namespace NewMonado
         }
         public void ActivateAura(string effectId)
         {
-            EffectInstance effectInstance = Catalog.GetData<EffectData>(effectId).Spawn(item.mainHandler.creature.transform.position, Quaternion.LookRotation(item.mainHandler.creature.transform.up), item.mainHandler.creature.transform);
+            EffectInstance effectInstance = Catalog.GetData<EffectData>(effectId).Spawn(item.mainHandler.creature.transform.position, Quaternion.LookRotation(item.mainHandler.creature.transform.up), item.mainHandler.creature.transform, null, false);
             effectInstance.SetIntensity(0.1f);
             effectInstance.Play();
             if (Voices)
             {
                 if (voice.isPlaying) voice.Stop();
-                voice = Catalog.GetData<EffectData>(effectId + voiceText).Spawn(item.mainHandler.creature.transform.position, Quaternion.LookRotation(item.mainHandler.creature.transform.up), item.mainHandler.creature.transform);
+                voice = Catalog.GetData<EffectData>(effectId + voiceText).Spawn(item.mainHandler.creature.transform.position, Quaternion.LookRotation(item.mainHandler.creature.transform.up), item.mainHandler.creature.transform, null, false);
                 voice.SetIntensity(0.1f);
                 voice.Play();
             }
@@ -729,7 +718,7 @@ namespace NewMonado
             creature = GetComponent<Creature>();
             imbueSpell = Catalog.GetData<SpellCastCharge>("Fire");
             timer = Time.time;
-            instance = Catalog.GetData<EffectData>("MonadoEnchantAura").Spawn(creature.transform);
+            instance = Catalog.GetData<EffectData>("MonadoEnchantAura").Spawn(creature.transform, null, false);
             instance.SetRenderer(creature.GetRendererForVFX(), false);
             instance.SetIntensity(1f);
             instance.Play();
@@ -793,12 +782,23 @@ namespace NewMonado
         public void Start()
         {
             creature = GetComponent<Creature>();
+            creature.OnDamageEvent += Creature_OnDamageEvent;
             timer = Time.time;
-            instance = Catalog.GetData<EffectData>("MonadoShieldAura").Spawn(creature.transform);
+            instance = Catalog.GetData<EffectData>("MonadoShieldAura").Spawn(creature.transform, null, false);
             instance.SetRenderer(creature.GetRendererForVFX(), false);
             instance.SetIntensity(1f);
             instance.Play();
         }
+
+        private void Creature_OnDamageEvent(CollisionInstance collisionInstance, EventTime eventTime)
+        {
+            if (collisionInstance?.damageStruct != null && eventTime == EventTime.OnStart && !collisionInstance.ignoreDamage)
+            {
+                absorb -= collisionInstance.damageStruct.damage;
+                collisionInstance.damageStruct.damage = 0;
+            }
+        }
+
         public void FixedUpdate()
         {
             if (Time.time - timer >= auraTime || creature.isKilled || absorb <= 0)
@@ -809,6 +809,7 @@ namespace NewMonado
         public void OnDestroy()
         {
             instance.Stop();
+            creature.OnDamageEvent -= Creature_OnDamageEvent;
         }
     }
     public class SpeedAura : MonoBehaviour
@@ -828,7 +829,7 @@ namespace NewMonado
             creature = GetComponent<Creature>();
             timer = Time.time;
             creature.currentLocomotion.SetSpeedModifier(this, mult, mult, mult, mult, mult);
-            instance = Catalog.GetData<EffectData>("MonadoSpeedAura").Spawn(creature.transform);
+            instance = Catalog.GetData<EffectData>("MonadoSpeedAura").Spawn(creature.transform, null, false);
             instance.SetRenderer(creature.GetRendererForVFX(), false);
             instance.SetIntensity(1f);
             instance.Play();
@@ -861,7 +862,7 @@ namespace NewMonado
             creature = GetComponent<Creature>();
             timer = Time.time;
             creature.TryElectrocute(1, 3, true, false, Catalog.GetData<EffectData>("ImbueLightningRagdoll", true));
-            instance = Catalog.GetData<EffectData>("MonadoPurgeAura").Spawn(creature.transform);
+            instance = Catalog.GetData<EffectData>("MonadoPurgeAura").Spawn(creature.transform, null, false);
             creature.ragdoll.AddPhysicToggleModifier(this);
             instance.SetRenderer(creature.GetRendererForVFX(), false);
             instance.SetIntensity(1f);
@@ -900,7 +901,7 @@ namespace NewMonado
             creature = GetComponent<Creature>();
             timer = Time.time;
             creature.ragdoll.SetState(Ragdoll.State.Destabilized);
-            instance = Catalog.GetData<EffectData>("MonadoCycloneAura").Spawn(creature.transform);
+            instance = Catalog.GetData<EffectData>("MonadoCycloneAura").Spawn(creature.transform, null, false);
             instance.SetRenderer(creature.GetRendererForVFX(), false);
             instance.SetIntensity(1f);
             instance.Play();
@@ -936,12 +937,22 @@ namespace NewMonado
         public void Start()
         {
             creature = GetComponent<Creature>();
+            creature.OnDamageEvent += Creature_OnDamageEvent;
             timer = Time.time;
-            instance = Catalog.GetData<EffectData>("MonadoArmorAura").Spawn(creature.transform);
+            instance = Catalog.GetData<EffectData>("MonadoArmorAura").Spawn(creature.transform, null, false);
             instance.SetRenderer(creature.GetRendererForVFX(), false);
             instance.SetIntensity(1f);
             instance.Play();
         }
+
+        private void Creature_OnDamageEvent(CollisionInstance collisionInstance, EventTime eventTime)
+        {
+            if (collisionInstance?.damageStruct != null && eventTime == EventTime.OnStart && !collisionInstance.ignoreDamage)
+            {
+                collisionInstance.damageStruct.damage *= 1 - mult;
+            }
+        }
+
         public void FixedUpdate()
         {
             if (Time.time - timer >= auraTime || creature.isKilled)
@@ -972,7 +983,7 @@ namespace NewMonado
             creature = GetComponent<Creature>();
             timer = Time.time;
             cooldown = Time.time;
-            instance = Catalog.GetData<EffectData>("MonadoEaterAura").Spawn(creature.transform);
+            instance = Catalog.GetData<EffectData>("MonadoEaterAura").Spawn(creature.transform, null, false);
             instance.SetRenderer(creature.GetRendererForVFX(), false);
             instance.SetIntensity(1f);
             instance.Play();
